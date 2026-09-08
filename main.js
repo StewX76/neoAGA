@@ -11,6 +11,12 @@ async function init() {
     const adapter =
         await navigator.gpu.requestAdapter();
 
+    if (!adapter) {
+        document.body.innerHTML =
+            "<h1>No GPU Adapter</h1>";
+        return;
+    }
+
     const device =
         await adapter.requestDevice();
 
@@ -62,20 +68,102 @@ struct Uniforms {
 var<uniform> uniforms : Uniforms;
 
 struct VSOut {
-    @builtin(position) position : vec4<f32>,
-    @location(0) uv : vec2<f32>
+    @builtin(position)
+    position : vec4<f32>,
+
+    @location(0)
+    uv : vec2<f32>
 };
+
+fn tunnelCenter(z : f32) -> vec2<f32>
+{
+    return vec2<f32>(
+        sin(z * 0.25) * 0.8,
+        cos(z * 0.17) * 0.6
+    );
+}
+
+fn mapTunnel(p0 : vec3<f32>) -> f32
+{
+    var p = p0;
+
+    let c =
+        tunnelCenter(
+            p.z
+        );
+
+    p.x = p.x - c.x;
+    p.y = p.y - c.y;
+
+    let radius =
+        1.4
+        +
+        0.15 *
+        sin(
+            p.z * 2.0
+            +
+            uniforms.time
+        );
+
+    return abs(
+        length(p.xy)
+        - radius
+    ) - 0.05;
+}
+
+fn calcNormal(
+    p : vec3<f32>
+) -> vec3<f32>
+{
+    let e = 0.002;
+
+    let dx =
+        mapTunnel(
+            p + vec3<f32>(e,0.0,0.0)
+        )
+        -
+        mapTunnel(
+            p - vec3<f32>(e,0.0,0.0)
+        );
+
+    let dy =
+        mapTunnel(
+            p + vec3<f32>(0.0,e,0.0)
+        )
+        -
+        mapTunnel(
+            p - vec3<f32>(0.0,e,0.0)
+        );
+
+    let dz =
+        mapTunnel(
+            p + vec3<f32>(0.0,0.0,e)
+        )
+        -
+        mapTunnel(
+            p - vec3<f32>(0.0,0.0,e)
+        );
+
+    return normalize(
+        vec3<f32>(
+            dx,dy,dz
+        )
+    );
+}
 
 @vertex
 fn vs_main(
-    @builtin(vertex_index) index : u32
-) -> VSOut {
-
-    var pos = array<vec2<f32>,3>(
-        vec2<f32>(-1.0,-3.0),
-        vec2<f32>(-1.0, 1.0),
-        vec2<f32>( 3.0, 1.0)
-    );
+    @builtin(vertex_index)
+    index : u32
+)
+-> VSOut
+{
+    var pos =
+        array<vec2<f32>,3>(
+            vec2<f32>(-1.0,-3.0),
+            vec2<f32>(-1.0, 1.0),
+            vec2<f32>( 3.0, 1.0)
+        );
 
     var out : VSOut;
 
@@ -95,7 +183,9 @@ fn vs_main(
 @fragment
 fn fs_main(
     input : VSOut
-) -> @location(0) vec4<f32>
+)
+-> @location(0)
+vec4<f32>
 {
     let t =
         uniforms.time;
@@ -103,32 +193,108 @@ fn fs_main(
     let uv =
         input.uv;
 
-    let r =
-        length(uv);
-
-    let angle =
-        atan2(
-            uv.y,
-            uv.x
+    let ro =
+        vec3<f32>(
+            0.0,
+            0.0,
+            t * 4.0
         );
 
-    let rings =
-        sin(
-            r * 20.0
-            -
-            t * 8.0
+    let rd =
+        normalize(
+            vec3<f32>(
+                uv.x,
+                uv.y,
+                1.6
+            )
         );
 
-    let swirl =
-        sin(
-            angle * 6.0
+    var dist : f32 = 0.0;
+    var hit : bool = false;
+
+    var p =
+        vec3<f32>(
+            0.0,
+            0.0,
+            0.0
+        );
+
+    for (
+        var i : i32 = 0;
+        i < 64;
+        i = i + 1
+    )
+    {
+        p =
+            ro
             +
-            t * 2.0
+            rd * dist;
+
+        let d =
+            mapTunnel(
+                p
+            );
+
+        if(d < 0.001)
+        {
+            hit = true;
+            break;
+        }
+
+        dist = dist + d;
+
+        if(dist > 40.0)
+        {
+            break;
+        }
+    }
+
+    if(!hit)
+    {
+        let haze =
+            max(
+                0.0,
+                1.0 -
+                length(uv)
+            );
+
+        return vec4<f32>(
+            0.02
+            +
+            haze * 0.02,
+
+            0.04
+            +
+            haze * 0.08,
+
+            0.06
+            +
+            haze * 0.12,
+
+            1.0
+        );
+    }
+
+    let n =
+        calcNormal(
+            p
         );
 
-    let brightness =
+    let light =
+        normalize(
+            vec3<f32>(
+                0.5,
+                0.7,
+                -0.5
+            )
+        );
+
+    let diffuse =
         max(
-            rings * swirl,
+            dot(
+                n,
+                light
+            ),
             0.0
         );
 
@@ -146,10 +312,52 @@ fn fs_main(
             0.28
         );
 
-    let color =
-        bronze * 0.3
+    let turquoise =
+        vec3<f32>(
+            0.15,
+            0.65,
+            0.60
+        );
+
+    var color =
+        bronze
         +
-        gold * brightness;
+        diffuse * gold;
+
+    let glow =
+        0.5
+        +
+        0.5 *
+        sin(
+            p.z * 6.0
+            -
+            t * 8.0
+        );
+
+    color =
+        color
+        +
+        turquoise
+        *
+        glow
+        *
+        0.25;
+
+    let fog =
+        exp(
+            -dist * 0.05
+        );
+
+    color =
+        mix(
+            vec3<f32>(
+                0.02,
+                0.08,
+                0.10
+            ),
+            color,
+            fog
+        );
 
     return vec4<f32>(
         color,
@@ -158,7 +366,7 @@ fn fs_main(
 }
 
 `
-    });
+        });
 
     shader.getCompilationInfo()
         .then(info => {
@@ -169,7 +377,8 @@ fn fs_main(
         device.createBindGroupLayout({
             entries: [{
                 binding: 0,
-                visibility: GPUShaderStage.FRAGMENT,
+                visibility:
+                    GPUShaderStage.FRAGMENT,
                 buffer: {}
             }]
         });
@@ -184,16 +393,21 @@ fn fs_main(
     const pipeline =
         device.createRenderPipeline({
 
-            layout: pipelineLayout,
+            layout:
+                pipelineLayout,
 
             vertex: {
-                module: shader,
-                entryPoint: "vs_main"
+                module:
+                    shader,
+                entryPoint:
+                    "vs_main"
             },
 
             fragment: {
-                module: shader,
-                entryPoint: "fs_main",
+                module:
+                    shader,
+                entryPoint:
+                    "fs_main",
                 targets: [
                     { format }
                 ]
@@ -220,8 +434,8 @@ fn fs_main(
             }]
         });
 
-    function frame(ms) {
-
+    function frame(ms)
+    {
         const time =
             ms * 0.001;
 
@@ -256,8 +470,11 @@ fn fs_main(
                         a: 1
                     },
 
-                    loadOp: "clear",
-                    storeOp: "store"
+                    loadOp:
+                        "clear",
+
+                    storeOp:
+                        "store"
                 }]
             });
 
