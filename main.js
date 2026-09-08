@@ -3,22 +3,22 @@ const canvas = document.getElementById("gfx");
 async function init() {
 
     if (!navigator.gpu) {
-        document.body.innerHTML =
-            "<h1>WebGPU not supported</h1>";
+        document.body.innerHTML = "<h1>WebGPU not supported</h1>";
         return;
     }
 
-    const adapter =
-        await navigator.gpu.requestAdapter();
+    const adapter = await navigator.gpu.requestAdapter();
 
-    const device =
-        await adapter.requestDevice();
+    if (!adapter) {
+        document.body.innerHTML = "<h1>No GPU adapter</h1>";
+        return;
+    }
 
-    const context =
-        canvas.getContext("webgpu");
+    const device = await adapter.requestDevice();
 
-    const format =
-        navigator.gpu.getPreferredCanvasFormat();
+    const context = canvas.getContext("webgpu");
+
+    const format = navigator.gpu.getPreferredCanvasFormat();
 
     function resize() {
         canvas.width = window.innerWidth;
@@ -26,11 +26,7 @@ async function init() {
     }
 
     resize();
-
-    window.addEventListener(
-        "resize",
-        resize
-    );
+    window.addEventListener("resize", resize);
 
     context.configure({
         device,
@@ -39,14 +35,7 @@ async function init() {
     });
 
     const shader = device.createShaderModule({
-code: `
-struct Uniforms {
-    time : f32
-};
-
-@group(0) @binding(0)
-var<uniform> uniforms : Uniforms;
-
+        code: `
 @vertex
 fn vs_main(
     @builtin(vertex_index) index : u32
@@ -78,94 +67,36 @@ fn fs_main()
     );
 }
 `
-});
-    const uniformBuffer =
-        device.createBuffer({
-            size: 16,
-            usage:
-                GPUBufferUsage.UNIFORM |
-                GPUBufferUsage.COPY_DST
-        });
+    });
 
-    const bindGroupLayout =
-        device.createBindGroupLayout({
-            entries: [
-                {
-                    binding: 0,
-                    visibility:
-                        GPUShaderStage.FRAGMENT,
-                    buffer: {}
-                }
-            ]
-        });
+    const pipeline = device.createRenderPipeline({
+        layout: "auto",
 
-    const pipelineLayout =
-        device.createPipelineLayout({
-            bindGroupLayouts: [
-                bindGroupLayout
-            ]
-        });
+        vertex: {
+            module: shader,
+            entryPoint: "vs_main"
+        },
 
-    const pipeline =
-        device.createRenderPipeline({
-            layout: pipelineLayout,
+        fragment: {
+            module: shader,
+            entryPoint: "fs_main",
+            targets: [{ format }]
+        },
 
-            vertex: {
-                module: shader,
-                entryPoint: "vs_main"
-            },
+        primitive: {
+            topology: "triangle-list"
+        }
+    });
 
-            fragment: {
-                module: shader,
-                entryPoint: "fs_main",
-                targets: [
-                    { format }
-                ]
-            },
-
-            primitive: {
-                topology:
-                    "triangle-list"
-            }
-        });
-
-    const bindGroup =
-        device.createBindGroup({
-            layout: bindGroupLayout,
-
-            entries: [
-                {
-                    binding: 0,
-                    resource: {
-                        buffer:
-                            uniformBuffer
-                    }
-                }
-            ]
-        });
-
-    function frame(ms) {
-
-        const time =
-            ms * 0.001;
-
-        device.queue.writeBuffer(
-            uniformBuffer,
-            0,
-            new Float32Array([time])
-        );
+    function frame() {
 
         const encoder =
             device.createCommandEncoder();
 
         const pass =
             encoder.beginRenderPass({
-
-                colorAttachments: [
-
-                {
-                    view:
-                        context
+                colorAttachments: [{
+                    view: context
                         .getCurrentTexture()
                         .createView(),
 
@@ -178,36 +109,21 @@ fn fs_main()
 
                     loadOp: "clear",
                     storeOp: "store"
-                }
-
-                ]
+                }]
             });
 
-        pass.setPipeline(
-            pipeline
-        );
-
-        pass.setBindGroup(
-            0,
-            bindGroup
-        );
-
+        pass.setPipeline(pipeline);
         pass.draw(3);
-
         pass.end();
 
         device.queue.submit([
             encoder.finish()
         ]);
 
-        requestAnimationFrame(
-            frame
-        );
+        requestAnimationFrame(frame);
     }
 
-    requestAnimationFrame(
-        frame
-    );
+    requestAnimationFrame(frame);
 }
 
 init();
