@@ -67,14 +67,42 @@ fn vs_main(
 }
 
 @fragment
-fn fs_main()
+fn fs_main(
+    @builtin(position) fragCoord : vec4<f32>
+)
 -> @location(0) vec4<f32>
 {
-    let r = 0.5 + 0.5 * sin(uniforms.time);
-    let g = 0.4;
-    let b = 0.1;
+    let t = uniforms.time;
 
-    return vec4<f32>(r,g,b,1.0);
+    let uv =
+        fragCoord.xy /
+        vec2<f32>(1920.0,1080.0);
+
+    let r =
+        0.4 +
+        0.3 * sin(t);
+
+    let g =
+        0.25 +
+        0.15 * sin(t * 0.7);
+
+    let b =
+        0.08 +
+        0.05 * sin(t * 0.4);
+
+    let vignette =
+        1.0 -
+        distance(
+            uv,
+            vec2<f32>(0.5,0.5)
+        ) * 0.8;
+
+    return vec4<f32>(
+        r * vignette,
+        g * vignette,
+        b * vignette,
+        1.0
+    );
 }
 `
 });
