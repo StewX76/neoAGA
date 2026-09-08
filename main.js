@@ -42,326 +42,39 @@ async function init() {
 code: `
 struct Uniforms {
     time : f32
-}
+};
 
 @group(0) @binding(0)
 var<uniform> uniforms : Uniforms;
 
-const MAX_STEPS : i32 = 96;
-const MAX_DIST : f32 = 80.0;
-const EPSILON : f32 = 0.001;
-
-fn rot(a:f32)->mat2x2<f32>{
-    let c=cos(a);
-    let s=sin(a);
-
-    return mat2x2<f32>(
-        c,-s,
-        s, c
-    );
-}
-
-fn hash(p:vec3<f32>) -> f32
-{
-    return fract(
-        sin(
-            dot(
-                p,
-                vec3<f32>(
-                    127.1,
-                    311.7,
-                    74.7
-                )
-            )
-        ) * 43758.5453
-    );
-}
-
-fn noise(p:vec3<f32>) -> f32
-{
-    let i=floor(p);
-    let f=fract(p);
-
-    let u=f*f*(3.0-2.0*f);
-
-    return mix(
-        mix(
-            mix(
-                hash(i+vec3(0,0,0)),
-                hash(i+vec3(1,0,0)),
-                u.x
-            ),
-            mix(
-                hash(i+vec3(0,1,0)),
-                hash(i+vec3(1,1,0)),
-                u.x
-            ),
-            u.y
-        ),
-        mix(
-            mix(
-                hash(i+vec3(0,0,1)),
-                hash(i+vec3(1,0,1)),
-                u.x
-            ),
-            mix(
-                hash(i+vec3(0,1,1)),
-                hash(i+vec3(1,1,1)),
-                u.x
-            ),
-            u.y
-        ),
-        u.z
-    );
-}
-
-fn fbm(p:vec3<f32>) -> f32
-{
-    var q=p;
-    var a=0.5;
-    var v=0.0;
-
-    for(var i=0;i<5;i++)
-    {
-        v+=noise(q)*a;
-        q*=2.0;
-        a*=0.5;
-    }
-
-    return v;
-}
-
-fn tunnelCenter(z:f32)->vec2<f32>
-{
-    return vec2<f32>(
-        sin(z*0.20)*1.2,
-        cos(z*0.13)*0.8
-    );
-}
-
-fn map(pos:vec3<f32>)->f32
-{
-    var p=pos;
-
-    p.xy-=tunnelCenter(p.z);
-
-    let n=
-        fbm(
-            p*0.7+
-            uniforms.time*0.2
-        );
-
-    let radius=
-        2.2+
-        n*0.6;
-
-    return length(p.xy)-radius;
-}
-
-fn normal(p:vec3<f32>) -> vec3<f32>
-{
-    let e=0.002;
-
-    return normalize(
-        vec3<f32>(
-            map(p+vec3(e,0,0))-map(p-vec3(e,0,0)),
-            map(p+vec3(0,e,0))-map(p-vec3(0,e,0)),
-            map(p+vec3(0,0,e))-map(p-vec3(0,0,e))
-        )
-    );
-}
-
-fn palette(t:f32)->vec3<f32>
-{
-    let bronze=
-        vec3<f32>(
-            0.45,
-            0.30,
-            0.16
-        );
-
-    let gold=
-        vec3<f32>(
-            0.72,
-            0.60,
-            0.28
-        );
-
-    let accent=
-        vec3<f32>(
-            0.15,
-            0.65,
-            0.60
-        );
-
-    return mix(
-        bronze,
-        gold,
-        t
-    )+accent*pow(t,8.0);
-}
-
 @vertex
 fn vs_main(
-    @builtin(vertex_index)
-    index:u32
+    @builtin(vertex_index) index : u32
 )
--> @builtin(position)
-vec4<f32>
+-> @builtin(position) vec4<f32>
 {
-    var pos=array<vec2<f32>,3>(
-        vec2(-1,-3),
-        vec2(-1,1),
-        vec2(3,1)
+    var pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -3.0),
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>(3.0, 1.0)
     );
 
-    return vec4(
+    return vec4<f32>(
         pos[index],
-        0,
-        1
+        0.0,
+        1.0
     );
 }
 
 @fragment
-fn fs_main(
-    @builtin(position)
-    fragCoord:vec4<f32>
-)
--> @location(0)
-vec4<f32>
+fn fs_main()
+-> @location(0) vec4<f32>
 {
-    let resolution=
-        vec2<f32>(
-            1920.0,
-            1080.0
-        );
+    let r = 0.5 + 0.5 * sin(uniforms.time);
+    let g = 0.4;
+    let b = 0.1;
 
-    let uv=
-        (
-            fragCoord.xy*2.0
-            -resolution
-        )
-        /resolution.y;
-
-    let t=
-        uniforms.time;
-
-    let ro=
-        vec3<f32>(
-            0.0,
-            0.0,
-            t*4.0
-        );
-
-    let look=
-        ro+
-        vec3<f32>(
-            0.0,
-            0.0,
-            2.0
-        );
-
-    let fw=
-        normalize(
-            look-ro
-        );
-
-    let rt=
-        normalize(
-            cross(
-                vec3(0,1,0),
-                fw
-            )
-        );
-
-    let up=
-        cross(
-            fw,
-            rt
-        );
-
-    let rd=
-        normalize(
-            fw+
-            uv.x*rt+
-            uv.y*up
-        );
-
-    var dist=0.0;
-    var hit=false;
-    var p=ro;
-
-    for(var i=0;i<MAX_STEPS;i++)
-    {
-        p=ro+rd*dist;
-
-        let d=map(p);
-
-        if(abs(d)<EPSILON)
-        {
-            hit=true;
-            break;
-        }
-
-        dist+=d;
-
-        if(dist>MAX_DIST)
-        {
-            break;
-        }
-    }
-
-    if(!hit)
-    {
-        return vec4(
-            0.01,
-            0.01,
-            0.015,
-            1.0
-        );
-    }
-
-    let n=
-        normal(p);
-
-    let lightDir=
-        normalize(
-            vec3<f32>(
-                0.5,
-                0.8,
-                -0.3
-            )
-        );
-
-    let diff=
-        max(
-            dot(n,lightDir),
-            0.0
-        );
-
-    let fres=
-        pow(
-            1.0-
-            max(dot(n,-rd),0.0),
-            4.0
-        );
-
-    let glow=
-        fbm(
-            p*2.0
-        );
-
-    let color=
-        palette(diff)
-        +
-        fres*0.4
-        +
-        glow*0.1;
-
-    return vec4(
-        color,
-        1.0
-    );
+    return vec4<f32>(r,g,b,1.0);
 }
 `
 });
