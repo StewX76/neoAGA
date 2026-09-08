@@ -154,17 +154,14 @@ fn tunnelCenter(
 }
 
 // ---------------------------------------------
-// Scene — one continuous organic surface:
-// breathing radius + spiral ribs + vertebrae
-// bulges + fine noise, all folded into the
-// radius itself (no separate floating rings)
+// Scene — continuous organic surface
 // ---------------------------------------------
 
-const BASE_RADIUS   = 1.45;
-const SPIRAL_TWIST  = 0.85;
-const RIB_DEPTH     = 0.06;
-const VERT_SPACING  = 3.2;
-const VERT_BULGE    = 0.22;
+const BASE_RADIUS    = 1.45;
+const SPIRAL_TWIST   = 0.85;
+const RIB_DEPTH      = 0.06;
+const VERT_SPACING   = 3.2;
+const VERT_BULGE     = 0.22;
 const ORGANIC_AMOUNT = 0.045;
 
 fn mapScene(
@@ -185,12 +182,10 @@ fn mapScene(
     let distFromCenter =
         length(p.xy);
 
-    // breathing base radius
     var radius =
         BASE_RADIUS +
         0.10 * sin(p.z * 4.0 + uniforms.time * 1.5);
 
-    // spiral ribs — carved into the wall, not a separate shape
     let spiralPhase =
         p.z * 0.35 + angle * SPIRAL_TWIST;
 
@@ -202,7 +197,6 @@ fn mapScene(
 
     radius = radius - ribGroove;
 
-    // biomechanical vertebrae — periodic bulges along z
     let vertPhase =
         fract(p.z / VERT_SPACING) - 0.5;
 
@@ -211,7 +205,6 @@ fn mapScene(
 
     radius = radius - vertProfile * VERT_BULGE;
 
-    // organic bone-like irregularity
     let organicNoise =
         fbm2(vec2<f32>(angle * 2.5, p.z * 0.6)) - 0.5;
 
@@ -244,8 +237,6 @@ fn getNormal(
     return normalize(vec3<f32>(dx, dy, dz));
 }
 
-// cheap raymarched ambient occlusion — deepens the shadows
-// in the ribs / vertebra grooves instead of flat shading
 fn calcAO(
     p : vec3<f32>,
     n : vec3<f32>
@@ -267,6 +258,75 @@ fn calcAO(
     }
 
     return clamp(1.0 - occ * 3.0, 0.0, 1.0);
+}
+
+// ---------------------------------------------
+// Copper Dream Layer — scanlines, golden sweeps,
+// raster glow, finom overlay minden jeleneten
+// ---------------------------------------------
+
+fn copperLayer(
+    uv      : vec2<f32>,
+    t       : f32,
+    fog     : f32
+) -> vec3<f32>
+{
+    // alap scanline moduláció (Y irány)
+    let scanFreq  = 480.0;
+    let scanPhase =
+        uv.y * scanFreq - t * 24.0;
+
+    let scan =
+        0.5 + 0.5 * sin(scanPhase);
+
+    let scanMask =
+        smoothstep(0.2, 1.0, abs(uv.y)) * 0.6;
+
+    // arany sweepek — lassan felfelé vándorló sávok
+    let sweepFreq  = 6.0;
+    let sweepPhase =
+        uv.y * sweepFreq + t * 0.6;
+
+    let sweepBand =
+        smoothstep(0.3, 0.95, sin(sweepPhase));
+
+    let sweepGlow =
+        pow(sweepBand, 4.0);
+
+    let copperGold =
+        vec3<f32>(0.85, 0.72, 0.40);
+
+    let copperBronze =
+        vec3<f32>(0.40, 0.26, 0.14);
+
+    let baseCopper =
+        mix(copperBronze, copperGold, 0.65);
+
+    var layer =
+        baseCopper * (scan * 0.12 * scanMask);
+
+    layer =
+        layer + copperGold * sweepGlow * 0.18;
+
+    // raster glow — finom horizontális fénycsíkok
+    let rasterFreq  = 18.0;
+    let rasterPhase =
+        uv.y * rasterFreq + t * 1.8;
+
+    let rasterBand =
+        smoothstep(0.4, 0.98, sin(rasterPhase));
+
+    let rasterGlow =
+        pow(rasterBand, 3.0);
+
+    layer =
+        layer + copperGold * rasterGlow * 0.12;
+
+    // foggal súlyozva — távolban erősebb, közelben gyengébb
+    let intensity =
+        0.35 * (1.0 - fog);
+
+    return layer * intensity;
 }
 
 @fragment
@@ -291,7 +351,6 @@ vec4<f32>
 
     let s = t * SPEED;
 
-    // --- tunnel-follow camera ---
     let camCenter =
         tunnelCenter(s);
 
@@ -318,7 +377,6 @@ vec4<f32>
     var up =
         cross(right, forward);
 
-    // cinematic roll through the curves
     let roll =
         sin(s * 0.06) * 0.25;
 
@@ -378,12 +436,22 @@ vec4<f32>
         let depth =
             max(0.0, 1.0 - length(uv));
 
-        return vec4<f32>(
-            0.02,
-            0.05 + depth * 0.15,
-            0.08 + depth * 0.25,
-            1.0
-        );
+        var bg =
+            vec3<f32>(
+                0.02,
+                0.05 + depth * 0.15,
+                0.08 + depth * 0.25
+            );
+
+        let fogBg =
+            exp(-total * 0.035);
+
+        let copper =
+            copperLayer(uv, t, fogBg);
+
+        bg = bg + copper;
+
+        return vec4<f32>(bg, 1.0);
     }
 
     let n =
@@ -410,7 +478,6 @@ vec4<f32>
     var color =
         bronze + diffuse * gold;
 
-    // ribs / vertebrae glow, riding the spiral
     let pulse =
         0.5 + 0.5 * sin(p.z * 12.0 - t * 12.0);
 
@@ -420,11 +487,9 @@ vec4<f32>
     color =
         color + turquoise * ribGlow * 0.40;
 
-    // deeper shadows — AO darkens grooves, contrast pushed up
     color =
         color * (0.25 + 0.85 * ao);
 
-    // rim light — separates silhouette from the fog
     let rim =
         pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
 
@@ -440,7 +505,13 @@ vec4<f32>
     color =
         fogColor * (1.0 - fog) + color * fog;
 
-    // speed sensation — faint radial streaks + edge vignette
+    // Copper Dream overlay a tunnelre is
+    let copper =
+        copperLayer(uv, t, fog);
+
+    color =
+        color + copper;
+
     let streakAngle =
         atan2(uv.y, uv.x);
 
