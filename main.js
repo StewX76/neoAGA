@@ -11,12 +11,6 @@ async function init() {
     const adapter =
         await navigator.gpu.requestAdapter();
 
-    if (!adapter) {
-        document.body.innerHTML =
-            "<h1>No GPU Adapter</h1>";
-        return;
-    }
-
     const device =
         await adapter.requestDevice();
 
@@ -54,7 +48,6 @@ async function init() {
 
     const shader =
         device.createShaderModule({
-
 code: `
 
 struct Uniforms {
@@ -75,88 +68,11 @@ struct VSOut {
     uv : vec2<f32>
 };
 
-fn tunnelCenter(z : f32) -> vec2<f32>
-{
-    return vec2<f32>(
-        sin(z * 0.25) * 0.8,
-        cos(z * 0.17) * 0.6
-    );
-}
-
-fn mapTunnel(p0 : vec3<f32>) -> f32
-{
-    var p = p0;
-
-    let c =
-        tunnelCenter(
-            p.z
-        );
-
-    p.x = p.x - c.x;
-    p.y = p.y - c.y;
-
-    let radius =
-        1.4
-        +
-        0.15 *
-        sin(
-            p.z * 2.0
-            +
-            uniforms.time
-        );
-
-    return abs(
-        length(p.xy)
-        - radius
-    ) - 0.05;
-}
-
-fn calcNormal(
-    p : vec3<f32>
-) -> vec3<f32>
-{
-    let e = 0.002;
-
-    let dx =
-        mapTunnel(
-            p + vec3<f32>(e,0.0,0.0)
-        )
-        -
-        mapTunnel(
-            p - vec3<f32>(e,0.0,0.0)
-        );
-
-    let dy =
-        mapTunnel(
-            p + vec3<f32>(0.0,e,0.0)
-        )
-        -
-        mapTunnel(
-            p - vec3<f32>(0.0,e,0.0)
-        );
-
-    let dz =
-        mapTunnel(
-            p + vec3<f32>(0.0,0.0,e)
-        )
-        -
-        mapTunnel(
-            p - vec3<f32>(0.0,0.0,e)
-        );
-
-    return normalize(
-        vec3<f32>(
-            dx,dy,dz
-        )
-    );
-}
-
 @vertex
 fn vs_main(
     @builtin(vertex_index)
     index : u32
-)
--> VSOut
+) -> VSOut
 {
     var pos =
         array<vec2<f32>,3>(
@@ -180,6 +96,87 @@ fn vs_main(
     return out;
 }
 
+fn tunnelCenter(
+    z : f32
+) -> vec2<f32>
+{
+    return vec2<f32>(
+        sin(z * 0.22) * 0.8,
+        cos(z * 0.15) * 0.6
+    );
+}
+
+fn mapScene(
+    p0 : vec3<f32>
+) -> f32
+{
+    var p = p0;
+
+    let c =
+        tunnelCenter(
+            p.z
+        );
+
+    p.x = p.x - c.x;
+    p.y = p.y - c.y;
+
+    let radius =
+        1.4 +
+        0.10 *
+        sin(
+            p.z * 4.0
+            +
+            uniforms.time
+        );
+
+    return abs(
+        length(p.xy)
+        - radius
+    );
+}
+
+fn getNormal(
+    p : vec3<f32>
+) -> vec3<f32>
+{
+    let e = 0.005;
+
+    let dx =
+        mapScene(
+            p + vec3<f32>(e,0.0,0.0)
+        )
+        -
+        mapScene(
+            p - vec3<f32>(e,0.0,0.0)
+        );
+
+    let dy =
+        mapScene(
+            p + vec3<f32>(0.0,e,0.0)
+        )
+        -
+        mapScene(
+            p - vec3<f32>(0.0,e,0.0)
+        );
+
+    let dz =
+        mapScene(
+            p + vec3<f32>(0.0,0.0,e)
+        )
+        -
+        mapScene(
+            p - vec3<f32>(0.0,0.0,e)
+        );
+
+    return normalize(
+        vec3<f32>(
+            dx,
+            dy,
+            dz
+        )
+    );
+}
+
 @fragment
 fn fs_main(
     input : VSOut
@@ -187,17 +184,17 @@ fn fs_main(
 -> @location(0)
 vec4<f32>
 {
-    let t =
-        uniforms.time;
-
     let uv =
         input.uv;
+
+    let t =
+        uniforms.time;
 
     let ro =
         vec3<f32>(
             0.0,
             0.0,
-            t * 4.0
+            t * 3.0
         );
 
     let rd =
@@ -205,21 +202,20 @@ vec4<f32>
             vec3<f32>(
                 uv.x,
                 uv.y,
-                1.6
+                1.5
             )
         );
 
-    var dist : f32 = 0.0;
-    var hit : bool = false;
+    var total =
+        0.0;
+
+    var hit =
+        false;
 
     var p =
-        vec3<f32>(
-            0.0,
-            0.0,
-            0.0
-        );
+        vec3<f32>(0.0);
 
-    for (
+    for(
         var i : i32 = 0;
         i < 64;
         i = i + 1
@@ -228,22 +224,26 @@ vec4<f32>
         p =
             ro
             +
-            rd * dist;
+            rd * total;
 
         let d =
-            mapTunnel(
-                p
-            );
+            mapScene(p);
 
-        if(d < 0.001)
+        if(d < 0.005)
         {
             hit = true;
             break;
         }
 
-        dist = dist + d;
+        total =
+            total
+            +
+            max(
+                d,
+                0.01
+            );
 
-        if(dist > 40.0)
+        if(total > 50.0)
         {
             break;
         }
@@ -251,41 +251,27 @@ vec4<f32>
 
     if(!hit)
     {
-        let haze =
-            max(
-                0.0,
-                1.0 -
-                length(uv)
-            );
+        let sky =
+            0.3 -
+            length(uv) * 0.2;
 
         return vec4<f32>(
-            0.02
-            +
-            haze * 0.02,
-
-            0.04
-            +
-            haze * 0.08,
-
-            0.06
-            +
-            haze * 0.12,
-
+            0.02,
+            0.05 + sky * 0.2,
+            0.08 + sky * 0.3,
             1.0
         );
     }
 
     let n =
-        calcNormal(
-            p
-        );
+        getNormal(p);
 
-    let light =
+    let lightDir =
         normalize(
             vec3<f32>(
                 0.5,
                 0.7,
-                -0.5
+                -0.4
             )
         );
 
@@ -293,7 +279,7 @@ vec4<f32>
         max(
             dot(
                 n,
-                light
+                lightDir
             ),
             0.0
         );
@@ -320,44 +306,37 @@ vec4<f32>
         );
 
     var color =
-        bronze
-        +
+        bronze +
         diffuse * gold;
 
-    let glow =
-        0.5
-        +
+    let pulse =
+        0.5 +
         0.5 *
         sin(
-            p.z * 6.0
+            p.z * 8.0
             -
-            t * 8.0
+            t * 10.0
         );
 
     color =
-        color
-        +
-        turquoise
-        *
-        glow
-        *
-        0.25;
+        color +
+        turquoise *
+        pulse *
+        0.20;
 
     let fog =
         exp(
-            -dist * 0.05
+            -total * 0.03
         );
 
     color =
-        mix(
-            vec3<f32>(
-                0.02,
-                0.08,
-                0.10
-            ),
-            color,
-            fog
-        );
+        vec3<f32>(
+            0.02,
+            0.08,
+            0.10
+        ) * (1.0 - fog)
+        +
+        color * fog;
 
     return vec4<f32>(
         color,
@@ -397,20 +376,14 @@ vec4<f32>
                 pipelineLayout,
 
             vertex: {
-                module:
-                    shader,
-                entryPoint:
-                    "vs_main"
+                module: shader,
+                entryPoint: "vs_main"
             },
 
             fragment: {
-                module:
-                    shader,
-                entryPoint:
-                    "fs_main",
-                targets: [
-                    { format }
-                ]
+                module: shader,
+                entryPoint: "fs_main",
+                targets: [{ format }]
             },
 
             primitive: {
@@ -426,7 +399,6 @@ vec4<f32>
 
             entries: [{
                 binding: 0,
-
                 resource: {
                     buffer:
                         uniformBuffer
@@ -455,9 +427,7 @@ vec4<f32>
 
         const pass =
             encoder.beginRenderPass({
-
                 colorAttachments: [{
-
                     view:
                         context
                         .getCurrentTexture()
@@ -470,11 +440,8 @@ vec4<f32>
                         a: 1
                     },
 
-                    loadOp:
-                        "clear",
-
-                    storeOp:
-                        "store"
+                    loadOp: "clear",
+                    storeOp: "store"
                 }]
             });
 
