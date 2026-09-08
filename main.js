@@ -175,6 +175,10 @@ fn fs_main(
 `
     });
 
+    shader.getCompilationInfo().then(info => {
+    console.log("WGSL INFO:");
+    console.log(info);
+});
     const pipeline = device.createRenderPipeline({
         layout: "auto",
 
