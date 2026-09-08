@@ -37,9 +37,6 @@ async function init() {
 
     // -------------------------------------------------
     // SCENE SHADER — tunnel raymarch + Copper Dream layer
-    // (bands / scanlines / echoes are screen-space, so
-    // they live here; only the feedback trail needs a
-    // second pass)
     // -------------------------------------------------
 
     const sceneShader =
@@ -88,8 +85,14 @@ fn vs_main(
     return out;
 }
 
+const TAU = 6.2831853;
+
 // ---------------------------------------------
-// Hash / Noise / FBM — organic surface irregularity
+// Hash / Noise / FBM
+// 2D version: used where no wrap-seam risk exists
+// 3D version: used for the organic wall noise, so
+// the angular axis can be embedded on a circle
+// (cos/sin) and stay seamless at any frequency
 // ---------------------------------------------
 
 fn hash21(p : vec2<f32>) -> f32
@@ -99,30 +102,48 @@ fn hash21(p : vec2<f32>) -> f32
     return fract((p3.x + p3.y) * p3.z);
 }
 
-fn noise2(p : vec2<f32>) -> f32
+fn hash31(p : vec3<f32>) -> f32
+{
+    var p3 = fract(p * 0.1031);
+    p3 = p3 + dot(p3, p3.zyx + 31.32);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn noise3(p : vec3<f32>) -> f32
 {
     let i = floor(p);
     let f = fract(p);
-
-    let a = hash21(i);
-    let b = hash21(i + vec2<f32>(1.0, 0.0));
-    let c = hash21(i + vec2<f32>(0.0, 1.0));
-    let d = hash21(i + vec2<f32>(1.0, 1.0));
-
     let u = f * f * (3.0 - 2.0 * f);
 
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    let c000 = hash31(i + vec3<f32>(0.0, 0.0, 0.0));
+    let c100 = hash31(i + vec3<f32>(1.0, 0.0, 0.0));
+    let c010 = hash31(i + vec3<f32>(0.0, 1.0, 0.0));
+    let c110 = hash31(i + vec3<f32>(1.0, 1.0, 0.0));
+    let c001 = hash31(i + vec3<f32>(0.0, 0.0, 1.0));
+    let c101 = hash31(i + vec3<f32>(1.0, 0.0, 1.0));
+    let c011 = hash31(i + vec3<f32>(0.0, 1.0, 1.0));
+    let c111 = hash31(i + vec3<f32>(1.0, 1.0, 1.0));
+
+    let x00 = mix(c000, c100, u.x);
+    let x10 = mix(c010, c110, u.x);
+    let x01 = mix(c001, c101, u.x);
+    let x11 = mix(c011, c111, u.x);
+
+    let y0 = mix(x00, x10, u.y);
+    let y1 = mix(x01, x11, u.y);
+
+    return mix(y0, y1, u.z);
 }
 
-fn fbm2(p0 : vec2<f32>) -> f32
+fn fbm3(p0 : vec3<f32>) -> f32
 {
     var p = p0;
     var value = 0.0;
     var amp = 0.5;
 
-    for (var i : i32 = 0; i < 4; i = i + 1)
+    for (var i : i32 = 0; i < 3; i = i + 1)
     {
-        value = value + amp * noise2(p);
+        value = value + amp * noise3(p);
         amp = amp * 0.5;
         p = p * 2.0;
     }
@@ -147,15 +168,21 @@ fn tunnelCenter(
 // ---------------------------------------------
 // Scene — breathing radius + spiral ribs +
 // vertebrae bulges + organic noise, folded
-// into a single continuous surface
+// into a single continuous surface.
+//
+// SPIRAL_STARTS MUST stay an integer — it counts
+// how many rib threads wrap the circumference.
+// Any non-integer value reintroduces the seam at
+// the atan2 wrap (this was the v0.6 bug).
 // ---------------------------------------------
 
 const BASE_RADIUS    = 1.45;
-const SPIRAL_TWIST   = 0.85;
+const SPIRAL_STARTS  = 3.0;
 const RIB_DEPTH      = 0.06;
 const VERT_SPACING   = 3.2;
 const VERT_BULGE     = 0.22;
 const ORGANIC_AMOUNT = 0.045;
+const ORGANIC_FREQ   = 2.2;
 
 fn mapScene(
     p0 : vec3<f32>
@@ -179,17 +206,25 @@ fn mapScene(
         BASE_RADIUS +
         0.10 * sin(p.z * 4.0 + uniforms.time * 1.5);
 
+    // spiral ribs — angle expressed in turns (-0.5..0.5)
+    // and multiplied by an INTEGER thread count, so the
+    // phase always wraps by a whole number of cycles
+    let angleTurns =
+        angle / TAU;
+
     let spiralPhase =
-        p.z * 0.35 + angle * SPIRAL_TWIST;
+        p.z * 0.35 + angleTurns * SPIRAL_STARTS;
 
     let ribWave =
-        sin(spiralPhase * 6.2831853);
+        sin(spiralPhase * TAU);
 
     let ribGroove =
         smoothstep(0.55, 1.0, ribWave) * RIB_DEPTH;
 
     radius = radius - ribGroove;
 
+    // biomechanical vertebrae — z-only, no angle term,
+    // so no seam risk here
     let vertPhase =
         fract(p.z / VERT_SPACING) - 0.5;
 
@@ -198,8 +233,17 @@ fn mapScene(
 
     radius = radius - vertProfile * VERT_BULGE;
 
+    // organic bone-like irregularity — angle embedded as
+    // a point on a circle (cos/sin) instead of raw angle,
+    // so it tiles seamlessly at any frequency
+    let circX =
+        cos(angle) * ORGANIC_FREQ;
+
+    let circY =
+        sin(angle) * ORGANIC_FREQ;
+
     let organicNoise =
-        fbm2(vec2<f32>(angle * 2.5, p.z * 0.6)) - 0.5;
+        fbm3(vec3<f32>(circX, circY, p.z * 0.6)) - 0.5;
 
     radius = radius + organicNoise * ORGANIC_AMOUNT;
 
@@ -322,6 +366,17 @@ vec4<f32>
             rolledUp * uv.y
         );
 
+    // Conservative sphere tracing: the combined perturbations
+    // (ribs + vertebrae + noise) are not a true signed distance
+    // field, so full steps can overshoot thin/close geometry —
+    // this was the "falls apart up close / at grazing angles"
+    // bug. Stepping by a fraction of the estimate (SAFETY) and
+    // using more, smaller steps trades a little performance for
+    // a field that behaves like a safe lower bound.
+    const SAFETY   = 0.7;
+    const MIN_STEP = 0.006;
+    const MAX_DIST = 60.0;
+
     var total = 0.0;
     var hit = false;
 
@@ -330,7 +385,7 @@ vec4<f32>
 
     for (
         var i : i32 = 0;
-        i < 90;
+        i < 130;
         i = i + 1
     )
     {
@@ -339,7 +394,10 @@ vec4<f32>
         let d =
             mapScene(p);
 
-        if (d < 0.0015 * max(total, 1.0))
+        let eps =
+            0.0008 * max(total, 1.0);
+
+        if (d < eps)
         {
             hit = true;
             break;
@@ -347,9 +405,9 @@ vec4<f32>
 
         total =
             total +
-            max(d, 0.01);
+            max(d * SAFETY, MIN_STEP);
 
-        if (total > 60.0)
+        if (total > MAX_DIST)
         {
             break;
         }
@@ -470,6 +528,8 @@ vec4<f32>
         color + vec3<f32>(1.0, 0.9, 0.7) * pow(scan, 6.0) * 0.03;
 
     // --- speed streaks + vignette ---
+    // (streakAngle * 60.0 — 60 is an integer multiple of the
+    // 2*pi wrap, so this one was already seamless)
     let streakAngle =
         atan2(uv.y, uv.x);
 
@@ -495,7 +555,6 @@ vec4<f32>
 
     // -------------------------------------------------
     // COMPOSE SHADER — recursive feedback trail
-    // (Design Bible: "Feedback: Recursive Frame Feedback")
     // -------------------------------------------------
 
     const composeShader =
@@ -557,8 +616,6 @@ fn fs_main(
     let newC =
         textureSample(newFrameTex, samp, uvTex).rgb;
 
-    // organic drift — slow zoom + rotation so trails
-    // swirl instead of freezing into a static ghost
     let center =
         vec2<f32>(0.5, 0.5);
 
@@ -587,7 +644,6 @@ fn fs_main(
     var combined =
         newC + prevC * DECAY;
 
-    // soft tonemap keeps the recursive buildup bounded
     combined =
         combined / (1.0 + combined);
 
@@ -774,7 +830,6 @@ fn fs_main(
 
         const encoder = device.createCommandEncoder();
 
-        // Pass 1 — render scene into offscreen texture
         const scenePass =
             encoder.beginRenderPass({
                 colorAttachments: [{
@@ -790,8 +845,6 @@ fn fs_main(
         scenePass.draw(3);
         scenePass.end();
 
-        // Pass 2 — composite with decayed feedback trail,
-        // write to canvas AND to the next feedback texture
         const readIdx = frameIndex % 2;
         const writeTex = readIdx === 0 ? texB : texA;
 
