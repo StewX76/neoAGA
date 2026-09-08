@@ -20,18 +20,6 @@ async function init() {
     const format =
         navigator.gpu.getPreferredCanvasFormat();
 
-    function resize() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    }
-
-    resize();
-
-    window.addEventListener(
-        "resize",
-        resize
-    );
-
     context.configure({
         device,
         format,
@@ -47,7 +35,14 @@ async function init() {
                 GPUBufferUsage.COPY_DST
         });
 
-    const shader =
+    // -------------------------------------------------
+    // SCENE SHADER — tunnel raymarch + Copper Dream layer
+    // (bands / scanlines / echoes are screen-space, so
+    // they live here; only the feedback trail needs a
+    // second pass)
+    // -------------------------------------------------
+
+    const sceneShader =
         device.createShaderModule({
 code: `
 
@@ -85,11 +80,7 @@ fn vs_main(
     var out : VSOut;
 
     out.position =
-        vec4<f32>(
-            pos[index],
-            0.0,
-            1.0
-        );
+        vec4<f32>(pos[index], 0.0, 1.0);
 
     out.uv =
         pos[index];
@@ -154,7 +145,9 @@ fn tunnelCenter(
 }
 
 // ---------------------------------------------
-// Scene — continuous organic surface
+// Scene — breathing radius + spiral ribs +
+// vertebrae bulges + organic noise, folded
+// into a single continuous surface
 // ---------------------------------------------
 
 const BASE_RADIUS    = 1.45;
@@ -260,75 +253,6 @@ fn calcAO(
     return clamp(1.0 - occ * 3.0, 0.0, 1.0);
 }
 
-// ---------------------------------------------
-// Copper Dream Layer — scanlines, golden sweeps,
-// raster glow, finom overlay minden jeleneten
-// ---------------------------------------------
-
-fn copperLayer(
-    uv      : vec2<f32>,
-    t       : f32,
-    fog     : f32
-) -> vec3<f32>
-{
-    // alap scanline moduláció (Y irány)
-    let scanFreq  = 480.0;
-    let scanPhase =
-        uv.y * scanFreq - t * 24.0;
-
-    let scan =
-        0.5 + 0.5 * sin(scanPhase);
-
-    let scanMask =
-        smoothstep(0.2, 1.0, abs(uv.y)) * 0.6;
-
-    // arany sweepek — lassan felfelé vándorló sávok
-    let sweepFreq  = 6.0;
-    let sweepPhase =
-        uv.y * sweepFreq + t * 0.6;
-
-    let sweepBand =
-        smoothstep(0.3, 0.95, sin(sweepPhase));
-
-    let sweepGlow =
-        pow(sweepBand, 4.0);
-
-    let copperGold =
-        vec3<f32>(0.85, 0.72, 0.40);
-
-    let copperBronze =
-        vec3<f32>(0.40, 0.26, 0.14);
-
-    let baseCopper =
-        mix(copperBronze, copperGold, 0.65);
-
-    var layer =
-        baseCopper * (scan * 0.12 * scanMask);
-
-    layer =
-        layer + copperGold * sweepGlow * 0.18;
-
-    // raster glow — finom horizontális fénycsíkok
-    let rasterFreq  = 18.0;
-    let rasterPhase =
-        uv.y * rasterFreq + t * 1.8;
-
-    let rasterBand =
-        smoothstep(0.4, 0.98, sin(rasterPhase));
-
-    let rasterGlow =
-        pow(rasterBand, 3.0);
-
-    layer =
-        layer + copperGold * rasterGlow * 0.12;
-
-    // foggal súlyozva — távolban erősebb, közelben gyengébb
-    let intensity =
-        0.35 * (1.0 - fog);
-
-    return layer * intensity;
-}
-
 @fragment
 fn fs_main(
     input : VSOut
@@ -431,43 +355,74 @@ vec4<f32>
         }
     }
 
+    var color : vec3<f32>;
+    var fog = 0.0;
+
     if (!hit)
     {
         let depth =
             max(0.0, 1.0 - length(uv));
 
-        var bg =
+        color =
             vec3<f32>(
                 0.02,
                 0.05 + depth * 0.15,
                 0.08 + depth * 0.25
             );
+    }
+    else
+    {
+        let n =
+            getNormal(p);
 
-        let fogBg =
+        let ao =
+            calcAO(p, n);
+
+        let lightDir =
+            normalize(vec3<f32>(0.6, 0.7, -0.5));
+
+        let diffuse =
+            max(dot(n, lightDir), 0.0);
+
+        let bronze =
+            vec3<f32>(0.42, 0.28, 0.15);
+
+        let gold =
+            vec3<f32>(0.80, 0.66, 0.32);
+
+        let turquoise =
+            vec3<f32>(0.15, 0.65, 0.60);
+
+        color =
+            bronze + diffuse * gold;
+
+        let pulse =
+            0.5 + 0.5 * sin(p.z * 12.0 - t * 12.0);
+
+        let ribGlow =
+            pulse * pulse * pulse;
+
+        color =
+            color + turquoise * ribGlow * 0.40;
+
+        color =
+            color * (0.25 + 0.85 * ao);
+
+        let rim =
+            pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+
+        color =
+            color + turquoise * rim * 0.25;
+
+        fog =
             exp(-total * 0.035);
 
-        let copper =
-            copperLayer(uv, t, fogBg);
+        let fogColor =
+            vec3<f32>(0.02, 0.08, 0.10);
 
-        bg = bg + copper;
-
-        return vec4<f32>(bg, 1.0);
+        color =
+            fogColor * (1.0 - fog) + color * fog;
     }
-
-    let n =
-        getNormal(p);
-
-    let ao =
-        calcAO(p, n);
-
-    let lightDir =
-        normalize(vec3<f32>(0.6, 0.7, -0.5));
-
-    let diffuse =
-        max(dot(n, lightDir), 0.0);
-
-    let bronze =
-        vec3<f32>(0.42, 0.28, 0.15);
 
     let gold =
         vec3<f32>(0.80, 0.66, 0.32);
@@ -475,43 +430,46 @@ vec4<f32>
     let turquoise =
         vec3<f32>(0.15, 0.65, 0.60);
 
-    var color =
-        bronze + diffuse * gold;
+    // --- Copper Dream: moving golden sweep ---
+    let bandDir =
+        normalize(vec2<f32>(0.4, 1.0));
 
-    let pulse =
-        0.5 + 0.5 * sin(p.z * 12.0 - t * 12.0);
+    let bandCoord =
+        dot(uv, bandDir) + t * 0.15;
 
-    let ribGlow =
-        pulse * pulse * pulse;
+    let band =
+        sin(bandCoord * 3.0) * 0.5 + 0.5;
 
-    color =
-        color + turquoise * ribGlow * 0.40;
-
-    color =
-        color * (0.25 + 0.85 * ao);
-
-    let rim =
-        pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+    let softBand =
+        smoothstep(0.35, 1.0, band);
 
     color =
-        color + turquoise * rim * 0.25;
+        color + gold * softBand * 0.05;
 
-    let fog =
-        exp(-total * 0.035);
+    // --- Copper Dream: raster echoes, fading repeats ---
+    for (var e : i32 = 1; e < 4; e = e + 1)
+    {
+        let phase =
+            bandCoord * 3.0 + f32(e) * 2.1;
 
-    let fogColor =
-        vec3<f32>(0.02, 0.08, 0.10);
+        let echo =
+            sin(phase) * 0.5 + 0.5;
+
+        let softEcho =
+            smoothstep(0.55, 1.0, echo);
+
+        color =
+            color + turquoise * softEcho * (0.025 / f32(e));
+    }
+
+    // --- Copper Dream: scanline glow ---
+    let scan =
+        sin(input.position.y * 0.9 - t * 40.0) * 0.5 + 0.5;
 
     color =
-        fogColor * (1.0 - fog) + color * fog;
+        color + vec3<f32>(1.0, 0.9, 0.7) * pow(scan, 6.0) * 0.03;
 
-    // Copper Dream overlay a tunnelre is
-    let copper =
-        copperLayer(uv, t, fog);
-
-    color =
-        color + copper;
-
+    // --- speed streaks + vignette ---
     let streakAngle =
         atan2(uv.y, uv.x);
 
@@ -535,135 +493,339 @@ vec4<f32>
 `
         });
 
-    shader.getCompilationInfo()
-        .then(info => {
-            console.log(info);
+    // -------------------------------------------------
+    // COMPOSE SHADER — recursive feedback trail
+    // (Design Bible: "Feedback: Recursive Frame Feedback")
+    // -------------------------------------------------
+
+    const composeShader =
+        device.createShaderModule({
+code: `
+
+struct VSOut {
+    @builtin(position)
+    position : vec4<f32>,
+
+    @location(0)
+    uv : vec2<f32>
+};
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index)
+    index : u32
+) -> VSOut
+{
+    var pos =
+        array<vec2<f32>,3>(
+            vec2<f32>(-1.0,-3.0),
+            vec2<f32>(-1.0, 1.0),
+            vec2<f32>( 3.0, 1.0)
+        );
+
+    var out : VSOut;
+
+    out.position =
+        vec4<f32>(pos[index], 0.0, 1.0);
+
+    out.uv =
+        pos[index];
+
+    return out;
+}
+
+@group(0) @binding(0) var samp        : sampler;
+@group(0) @binding(1) var newFrameTex : texture_2d<f32>;
+@group(0) @binding(2) var feedbackTex : texture_2d<f32>;
+
+struct FSOut {
+    @location(0) color    : vec4<f32>,
+    @location(1) feedback : vec4<f32>
+};
+
+@fragment
+fn fs_main(
+    input : VSOut
+) -> FSOut
+{
+    let uvTex =
+        vec2<f32>(
+            input.uv.x * 0.5 + 0.5,
+            1.0 - (input.uv.y * 0.5 + 0.5)
+        );
+
+    let newC =
+        textureSample(newFrameTex, samp, uvTex).rgb;
+
+    // organic drift — slow zoom + rotation so trails
+    // swirl instead of freezing into a static ghost
+    let center =
+        vec2<f32>(0.5, 0.5);
+
+    var duv =
+        uvTex - center;
+
+    const ANGLE = 0.006;
+
+    let cs = cos(ANGLE);
+    let sn = sin(ANGLE);
+
+    duv =
+        vec2<f32>(
+            duv.x * cs - duv.y * sn,
+            duv.x * sn + duv.y * cs
+        ) * 0.992;
+
+    let feedbackUV =
+        center + duv;
+
+    let prevC =
+        textureSample(feedbackTex, samp, feedbackUV).rgb;
+
+    const DECAY = 0.86;
+
+    var combined =
+        newC + prevC * DECAY;
+
+    // soft tonemap keeps the recursive buildup bounded
+    combined =
+        combined / (1.0 + combined);
+
+    var out : FSOut;
+
+    out.color =
+        vec4<f32>(combined, 1.0);
+
+    out.feedback =
+        vec4<f32>(combined, 1.0);
+
+    return out;
+}
+
+`
         });
 
-    const bindGroupLayout =
+    // -------------------------------------------------
+    // Pipelines
+    // -------------------------------------------------
+
+    const sceneBindGroupLayout =
         device.createBindGroupLayout({
             entries: [{
                 binding: 0,
-                visibility:
-                    GPUShaderStage.FRAGMENT,
+                visibility: GPUShaderStage.FRAGMENT,
                 buffer: {}
             }]
         });
 
-    const pipelineLayout =
-        device.createPipelineLayout({
-            bindGroupLayouts: [
-                bindGroupLayout
-            ]
-        });
-
-    const pipeline =
+    const scenePipeline =
         device.createRenderPipeline({
             layout:
-                pipelineLayout,
+                device.createPipelineLayout({
+                    bindGroupLayouts: [sceneBindGroupLayout]
+                }),
 
             vertex: {
-                module: shader,
+                module: sceneShader,
                 entryPoint: "vs_main"
             },
 
             fragment: {
-                module: shader,
+                module: sceneShader,
                 entryPoint: "fs_main",
-                targets: [
-                    { format }
-                ]
+                targets: [{ format }]
             },
 
-            primitive: {
-                topology:
-                    "triangle-list"
-            }
+            primitive: { topology: "triangle-list" }
         });
 
-    const bindGroup =
+    const sceneBindGroup =
         device.createBindGroup({
-            layout:
-                bindGroupLayout,
-
+            layout: sceneBindGroupLayout,
             entries: [{
                 binding: 0,
-                resource: {
-                    buffer:
-                        uniformBuffer
-                }
+                resource: { buffer: uniformBuffer }
             }]
         });
 
-    function frame(ms)
-    {
-        const time =
-            ms * 0.001;
+    const composeBindGroupLayout =
+        device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    sampler: { type: "filtering" }
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: "float" }
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: "float" }
+                }
+            ]
+        });
 
-        const aspect =
-            canvas.width / canvas.height;
+    const composePipeline =
+        device.createRenderPipeline({
+            layout:
+                device.createPipelineLayout({
+                    bindGroupLayouts: [composeBindGroupLayout]
+                }),
+
+            vertex: {
+                module: composeShader,
+                entryPoint: "vs_main"
+            },
+
+            fragment: {
+                module: composeShader,
+                entryPoint: "fs_main",
+                targets: [{ format }, { format }]
+            },
+
+            primitive: { topology: "triangle-list" }
+        });
+
+    const sampler =
+        device.createSampler({
+            magFilter: "linear",
+            minFilter: "linear",
+            addressModeU: "clamp-to-edge",
+            addressModeV: "clamp-to-edge"
+        });
+
+    // -------------------------------------------------
+    // Offscreen resources — recreated on resize
+    // -------------------------------------------------
+
+    let sceneTex, texA, texB;
+    let composeBindGroups = [null, null];
+    let frameIndex = 0;
+
+    function makeTex() {
+        return device.createTexture({
+            size: [canvas.width, canvas.height],
+            format,
+            usage:
+                GPUTextureUsage.RENDER_ATTACHMENT |
+                GPUTextureUsage.TEXTURE_BINDING
+        });
+    }
+
+    function createOffscreenResources() {
+        if (canvas.width === 0 || canvas.height === 0) return;
+
+        sceneTex = makeTex();
+        texA = makeTex();
+        texB = makeTex();
+
+        const sceneView = sceneTex.createView();
+
+        composeBindGroups[0] =
+            device.createBindGroup({
+                layout: composeBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: sampler },
+                    { binding: 1, resource: sceneView },
+                    { binding: 2, resource: texA.createView() }
+                ]
+            });
+
+        composeBindGroups[1] =
+            device.createBindGroup({
+                layout: composeBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: sampler },
+                    { binding: 1, resource: sceneView },
+                    { binding: 2, resource: texB.createView() }
+                ]
+            });
+
+        frameIndex = 0;
+    }
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        createOffscreenResources();
+    }
+
+    resize();
+
+    window.addEventListener("resize", resize);
+
+    // -------------------------------------------------
+    // Frame loop
+    // -------------------------------------------------
+
+    function frame(ms) {
+        const time = ms * 0.001;
+        const aspect = canvas.width / canvas.height;
 
         device.queue.writeBuffer(
             uniformBuffer,
             0,
-            new Float32Array([
-                time,
-                aspect,
-                0,
-                0
-            ])
+            new Float32Array([time, aspect, 0, 0])
         );
 
-        const encoder =
-            device.createCommandEncoder();
+        const encoder = device.createCommandEncoder();
 
-        const pass =
+        // Pass 1 — render scene into offscreen texture
+        const scenePass =
             encoder.beginRenderPass({
-
                 colorAttachments: [{
-
-                    view:
-                        context
-                        .getCurrentTexture()
-                        .createView(),
-
-                    clearValue: {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: 1
-                    },
-
+                    view: sceneTex.createView(),
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
                     loadOp: "clear",
                     storeOp: "store"
                 }]
             });
 
-        pass.setPipeline(
-            pipeline
-        );
+        scenePass.setPipeline(scenePipeline);
+        scenePass.setBindGroup(0, sceneBindGroup);
+        scenePass.draw(3);
+        scenePass.end();
 
-        pass.setBindGroup(
-            0,
-            bindGroup
-        );
+        // Pass 2 — composite with decayed feedback trail,
+        // write to canvas AND to the next feedback texture
+        const readIdx = frameIndex % 2;
+        const writeTex = readIdx === 0 ? texB : texA;
 
-        pass.draw(3);
+        const composePass =
+            encoder.beginRenderPass({
+                colorAttachments: [
+                    {
+                        view: context.getCurrentTexture().createView(),
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        loadOp: "clear",
+                        storeOp: "store"
+                    },
+                    {
+                        view: writeTex.createView(),
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        loadOp: "clear",
+                        storeOp: "store"
+                    }
+                ]
+            });
 
-        pass.end();
+        composePass.setPipeline(composePipeline);
+        composePass.setBindGroup(0, composeBindGroups[readIdx]);
+        composePass.draw(3);
+        composePass.end();
 
-        device.queue.submit([
-            encoder.finish()
-        ]);
+        device.queue.submit([encoder.finish()]);
 
-        requestAnimationFrame(
-            frame
-        );
+        frameIndex = frameIndex + 1;
+
+        requestAnimationFrame(frame);
     }
 
-    requestAnimationFrame(
-        frame
-    );
+    requestAnimationFrame(frame);
 }
 
 init();
