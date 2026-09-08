@@ -101,8 +101,8 @@ fn tunnelCenter(
 ) -> vec2<f32>
 {
     return vec2<f32>(
-        sin(z * 0.22) * 0.8,
-        cos(z * 0.15) * 0.6
+        sin(z * 0.20) * 0.9,
+        cos(z * 0.14) * 0.7
     );
 }
 
@@ -112,26 +112,42 @@ fn mapScene(
 {
     var p = p0;
 
-    let c =
+    let center =
         tunnelCenter(
             p.z
         );
 
-    p.x = p.x - c.x;
-    p.y = p.y - c.y;
+    p.x = p.x - center.x;
+    p.y = p.y - center.y;
 
     let radius =
-        1.4 +
-        0.10 *
+        1.45 +
+        0.12 *
         sin(
             p.z * 4.0
             +
             uniforms.time
         );
 
-    return abs(
-        length(p.xy)
-        - radius
+    let tunnelWall =
+        abs(
+            length(p.xy)
+            - radius
+        );
+
+    let ringPattern =
+        abs(
+            fract(
+                p.z * 0.35
+            ) - 0.5
+        );
+
+    let rib =
+        ringPattern - 0.08;
+
+    return max(
+        tunnelWall,
+        rib
     );
 }
 
@@ -139,7 +155,7 @@ fn getNormal(
     p : vec3<f32>
 ) -> vec3<f32>
 {
-    let e = 0.005;
+    let e = 0.004;
 
     let dx =
         mapScene(
@@ -194,7 +210,7 @@ vec4<f32>
         vec3<f32>(
             0.0,
             0.0,
-            t * 3.0
+            t * 3.2
         );
 
     let rd =
@@ -202,22 +218,19 @@ vec4<f32>
             vec3<f32>(
                 uv.x,
                 uv.y,
-                1.5
+                1.55
             )
         );
 
-    var total =
-        0.0;
-
-    var hit =
-        false;
+    var total = 0.0;
+    var hit = false;
 
     var p =
         vec3<f32>(0.0);
 
-    for(
+    for (
         var i : i32 = 0;
-        i < 64;
+        i < 80;
         i = i + 1
     )
     {
@@ -229,21 +242,20 @@ vec4<f32>
         let d =
             mapScene(p);
 
-        if(d < 0.005)
+        if(d < 0.003)
         {
             hit = true;
             break;
         }
 
         total =
-            total
-            +
+            total +
             max(
                 d,
                 0.01
             );
 
-        if(total > 50.0)
+        if(total > 60.0)
         {
             break;
         }
@@ -251,14 +263,17 @@ vec4<f32>
 
     if(!hit)
     {
-        let sky =
-            0.3 -
-            length(uv) * 0.2;
+        let depth =
+            max(
+                0.0,
+                1.0 -
+                length(uv)
+            );
 
         return vec4<f32>(
             0.02,
-            0.05 + sky * 0.2,
-            0.08 + sky * 0.3,
+            0.05 + depth * 0.15,
+            0.08 + depth * 0.25,
             1.0
         );
     }
@@ -269,9 +284,9 @@ vec4<f32>
     let lightDir =
         normalize(
             vec3<f32>(
-                0.5,
+                0.6,
                 0.7,
-                -0.4
+                -0.5
             )
         );
 
@@ -286,16 +301,16 @@ vec4<f32>
 
     let bronze =
         vec3<f32>(
-            0.45,
-            0.30,
-            0.16
+            0.42,
+            0.28,
+            0.15
         );
 
     let gold =
         vec3<f32>(
-            0.72,
-            0.60,
-            0.28
+            0.80,
+            0.66,
+            0.32
         );
 
     let turquoise =
@@ -306,35 +321,54 @@ vec4<f32>
         );
 
     var color =
-        bronze +
+        bronze
+        +
         diffuse * gold;
 
     let pulse =
         0.5 +
         0.5 *
         sin(
-            p.z * 8.0
+            p.z * 12.0
             -
-            t * 10.0
+            t * 12.0
         );
+
+    let ribGlow =
+        pulse * pulse * pulse;
 
     color =
         color +
         turquoise *
-        pulse *
-        0.20;
+        ribGlow *
+        0.40;
 
-    let fog =
-        exp(
-            -total * 0.03
+    let ribShadow =
+        0.65 +
+        0.35 *
+        sin(
+            p.z * 14.0
         );
 
     color =
+        color *
+        ribShadow;
+
+    let fog =
+        exp(
+            -total * 0.035
+        );
+
+    let fogColor =
         vec3<f32>(
             0.02,
             0.08,
             0.10
-        ) * (1.0 - fog)
+        );
+
+    color =
+        fogColor *
+        (1.0 - fog)
         +
         color * fog;
 
@@ -371,7 +405,6 @@ vec4<f32>
 
     const pipeline =
         device.createRenderPipeline({
-
             layout:
                 pipelineLayout,
 
@@ -383,7 +416,9 @@ vec4<f32>
             fragment: {
                 module: shader,
                 entryPoint: "fs_main",
-                targets: [{ format }]
+                targets: [
+                    { format }
+                ]
             },
 
             primitive: {
@@ -427,7 +462,9 @@ vec4<f32>
 
         const pass =
             encoder.beginRenderPass({
+
                 colorAttachments: [{
+
                     view:
                         context
                         .getCurrentTexture()
